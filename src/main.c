@@ -59,14 +59,41 @@
 /* HIDs queue size. */
 #define HIDS_QUEUE_SIZE 10
 
+
+static const struct gpio_dt_spec button_up = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_up), gpios, {0});
+static const struct gpio_dt_spec button_down = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_down), gpios, {0});
+static const struct gpio_dt_spec button_left = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_left), gpios, {0});
+static const struct gpio_dt_spec button_right = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_right), gpios, {0});
+static const struct gpio_dt_spec button_mid = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_mid), gpios, {0});
+static const struct gpio_dt_spec button_set = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_set), gpios, {0});
+static const struct gpio_dt_spec button_rst = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_rst), gpios, {0});
+static struct gpio_callback button_cb_data[7];
+
+static void num_comp_reply(bool accept);
+
+#define TU_BIT(n)             (1UL << (n))
+
+
+/// Standard Mouse Buttons Bitmap
+#define MOUSE_BUTTON_LEFT 1 ///< Left button
+#define  MOUSE_BUTTON_RIGHT 2 ///< Right button
+#define  MOUSE_BUTTON_MIDDLE 4 ///< Middle button
+
+
 /* Key used to move cursor left */
-#define KEY_LEFT_MASK   DK_BTN1_MSK
+#define KEY_LEFT_MASK   BIT(button_left.pin)
 /* Key used to move cursor up */
-#define KEY_UP_MASK     DK_BTN2_MSK
+#define KEY_UP_MASK     BIT(button_up.pin)
 /* Key used to move cursor right */
-#define KEY_RIGHT_MASK  DK_BTN3_MSK
+#define KEY_RIGHT_MASK  BIT(button_right.pin)
 /* Key used to move cursor down */
-#define KEY_DOWN_MASK   DK_BTN4_MSK
+#define KEY_DOWN_MASK   BIT(button_down.pin)
+/* Key used to move cursor mid */
+#define KEY_MID_MASK    BIT(button_mid.pin)
+/* Key used to move cursor set */
+#define KEY_SET_MASK    BIT(button_set.pin)
+/* Key used to move cursor rst */
+#define KEY_RST_MASK    BIT(button_rst.pin)
 
 /* Key used to accept or reject passkey value */
 #define KEY_PAIRING_ACCEPT DK_BTN1_MSK
@@ -82,6 +109,7 @@ static struct k_work hids_work;
 struct mouse_pos {
 	int16_t x_val;
 	int16_t y_val;
+	uint8_t buttons;
 };
 
 /* Mouse movement queue. */
@@ -224,7 +252,12 @@ static void pairing_process(struct k_work *work)
 			  addr, sizeof(addr));
 
 	printk("Passkey for %s: %06u\n", addr, pairing_data.passkey);
-	printk("Press Button 1 to confirm, Button 2 to reject.\n");
+//	printk("Press Button 1 to confirm, Button 2 to reject.\n");
+
+    // Auto confirm
+    if (k_msgq_num_used_get(&mitm_queue)) {
+        num_comp_reply(true);
+    }
 }
 
 
@@ -540,13 +573,54 @@ static void mouse_movement_send(int16_t x_delta, int16_t y_delta)
 	}
 }
 
+static void mouse_click_send(const uint8_t buttons)
+{
+	for (size_t i = 0; i < CONFIG_BT_HIDS_MAX_CLIENT_COUNT; i++) {
+
+		if (!conn_mode[i].conn) {
+			continue;
+		}
+
+		if (conn_mode[i].in_boot_mode) {
+			bt_hids_boot_mouse_inp_rep_send(&hids_obj,
+							     conn_mode[i].conn,
+                                 &buttons,
+							     0,
+							     0,
+							     NULL);
+		} else {
+
+            // 0. Buttons
+            // 1. Wheel
+            // 2. AC Pan
+            uint8_t buffer[INPUT_REP_BUTTONS_LEN];
+
+
+            // press
+            buffer[0] = buttons;
+			bt_hids_inp_rep_send(&hids_obj, conn_mode[i].conn,
+                         INPUT_REP_BUTTONS_INDEX,
+                         &buffer, sizeof(buffer), NULL);
+
+            // release
+            buffer[0] = 0;
+            bt_hids_inp_rep_send(&hids_obj, conn_mode[i].conn,
+                                 INPUT_REP_BUTTONS_INDEX,
+                                 &buffer, sizeof(buffer), NULL);
+		}
+	}
+}
 
 static void mouse_handler(struct k_work *work)
 {
 	struct mouse_pos pos;
 
 	while (!k_msgq_get(&hids_queue, &pos, K_NO_WAIT)) {
-		mouse_movement_send(pos.x_val, pos.y_val);
+        if (pos.buttons > 0) {
+            mouse_click_send(pos.buttons);
+        } else {
+		    mouse_movement_send(pos.x_val, pos.y_val);
+        }
 	}
 }
 
@@ -670,6 +744,104 @@ static void num_comp_reply(bool accept)
 }
 
 
+void button_pressed(const struct device *dev, struct gpio_callback *cb,
+                    uint32_t pins)
+{
+
+    bool data_to_send = false;
+    struct mouse_pos pos;
+    memset(&pos, 0, sizeof(struct mouse_pos));
+
+        printk("Button pressed at %" PRIu32 " PINS %" PRIu32 " PIN_MASK %" PRIu32 "\n", k_cycle_get_32(), pins, cb->pin_mask);
+
+        if (pins & KEY_LEFT_MASK) {
+            pos.x_val -= MOVEMENT_SPEED;
+            printk("%s(): left\n", __func__);
+            data_to_send = true;
+        }
+        if (pins & KEY_UP_MASK) {
+            pos.y_val -= MOVEMENT_SPEED;
+        printk("%s(): up\n", __func__);
+        data_to_send = true;
+    }
+    if (pins & KEY_RIGHT_MASK) {
+        pos.x_val += MOVEMENT_SPEED;
+        printk("%s(): right\n", __func__);
+        data_to_send = true;
+    }
+    if (pins & KEY_DOWN_MASK) {
+        pos.y_val += MOVEMENT_SPEED;
+        printk("%s(): down\n", __func__);
+        data_to_send = true;
+    }
+    if (pins & KEY_SET_MASK) {
+        printk("%s(): set\n", __func__);
+        pos.buttons = MOUSE_BUTTON_LEFT;
+        data_to_send = true;
+    }
+    if (pins & KEY_RST_MASK) {
+        printk("%s(): rst\n", __func__);
+        pos.buttons = MOUSE_BUTTON_RIGHT;
+        data_to_send = true;
+    }
+
+    if (data_to_send) {
+        int err;
+
+        err = k_msgq_put(&hids_queue, &pos, K_NO_WAIT);
+        if (err) {
+            printk("No space in the queue for button pressed\n");
+            return;
+        }
+        if (k_msgq_num_used_get(&hids_queue) == 1) {
+            k_work_submit(&hids_work);
+        }
+    }
+}
+
+int init_buttons()
+{
+    const struct gpio_dt_spec *buttons[] = {
+        &button_up,
+        &button_down,
+        &button_left,
+        &button_right,
+        &button_mid,
+        &button_set,
+        &button_rst,
+    };
+
+    for (int i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i) {
+        const struct gpio_dt_spec *button = buttons[i];
+
+        if (!gpio_is_ready_dt(button)) {
+            printk("Error: button device %s is not ready\n",
+                   button->port->name);
+            return 0;
+        }
+
+        int ret = gpio_pin_configure_dt(button, GPIO_INPUT);
+        if (ret != 0) {
+            printk("Error %d: failed to configure %s pin %d\n",
+                   ret, button->port->name, button->pin);
+            return 0;
+        }
+
+        ret = gpio_pin_interrupt_configure_dt(button, GPIO_INT_EDGE_TO_ACTIVE);
+        if (ret != 0) {
+            printk("Error %d: failed to configure interrupt on %s pin %d\n",
+                   ret, button->port->name, button->pin);
+            return 0;
+        }
+
+        gpio_init_callback(&button_cb_data[i], button_pressed, BIT(button->pin));
+        gpio_add_callback(button->port, &button_cb_data[i]);
+        printk("Set up button at %s pin %d\n", button->port->name, button->pin);
+    }
+
+    return 0;
+}
+
 void button_changed(uint32_t button_state, uint32_t has_changed)
 {
 	bool data_to_send = false;
@@ -738,6 +910,12 @@ void configure_buttons(void)
 	if (err) {
 		printk("Cannot init buttons (err: %d)\n", err);
 	}
+
+    err = init_buttons();
+
+    if (err) {
+        printk("Cannot init buttons (err: %d)\n", err);
+    }
 }
 
 

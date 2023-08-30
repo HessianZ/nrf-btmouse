@@ -1,0 +1,53 @@
+// To get started, press Ctrl+Space (or Option+Esc) to bring up the completion menu and view the available nodes.
+
+// You can also use the buttons in the sidebar to perform actions on nodes.
+// Actions currently available include:
+
+// * Enabling / disabling the node
+// * Adding the bus to a bus
+// * Removing the node
+// * Connecting ADC channels
+
+// For more help, browse the DeviceTree documentation at https://docs.zephyrproject.org/latest/guides/dts/index.html
+// You can also visit the nRF DeviceTree extension documentation at https://nrfconnect.github.io/vscode-nrf-connect/devicetree/nrfdevicetree.html
+
+/ {
+    buttons {
+        button_up: button-up {
+            gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            label = "Button UP";
+        };
+
+        button_down: button-down {
+            gpios = <&gpio1 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            label = "Button DOWN";
+        };
+
+        button_left: button-left {
+            gpios = <&gpio1 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            label = "Button LEFT";
+        };
+
+        button_right: button-right {
+            gpios = <&gpio1 14 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            label = "Button RIGHT";
+        };
+
+        button_mid: button-mid {
+            gpios = <&gpio1 15 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            label = "Button MID";
+        };
+
+        button_set: button-set {
+            gpios = <&gpio1 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            label = "Button SET";
+        };
+
+        button_rst: button-rst {
+            gpios = <&gpio1 3 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            label = "Button RST";
+        };
+    };
+};
+/delete-node/ &{/pin-controller/i2c1_default/group1/};
+/delete-node/ &{/pin-controller/i2c1_sleep/group1/};
