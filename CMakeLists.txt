@@ -5,6 +5,9 @@
 #
 cmake_minimum_required(VERSION 3.20.0)
 
+set(BOARD nrf7002dk_nrf5340_cpuapp)
+set(DTC_OVERLAY_FILE nrf7002dk_nrf5340_cpuapp.overlay)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(NONE)
 

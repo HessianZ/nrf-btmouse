@@ -27,6 +27,9 @@
 #include <bluetooth/services/hids.h>
 #include <zephyr/bluetooth/services/dis.h>
 #include <dk_buttons_and_leds.h>
+#include <zephyr/logging/log.h>
+
+#include "kbd.h"
 
 #define DEVICE_NAME     CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
@@ -67,11 +70,10 @@ static const struct gpio_dt_spec button_right = GPIO_DT_SPEC_GET_OR(DT_NODELABEL
 static const struct gpio_dt_spec button_mid = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_mid), gpios, {0});
 static const struct gpio_dt_spec button_set = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_set), gpios, {0});
 static const struct gpio_dt_spec button_rst = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(button_rst), gpios, {0});
-static struct gpio_callback button_cb_data[7];
+static struct gpio_callback mouse_button_callback;
+static struct gpio_callback mouse_move_callback;
 
 static void num_comp_reply(bool accept);
-
-#define TU_BIT(n)             (1UL << (n))
 
 
 /// Standard Mouse Buttons Bitmap
@@ -95,6 +97,7 @@ static void num_comp_reply(bool accept);
 /* Key used to move cursor rst */
 #define KEY_RST_MASK    BIT(button_rst.pin)
 
+
 /* Key used to accept or reject passkey value */
 #define KEY_PAIRING_ACCEPT DK_BTN1_MSK
 #define KEY_PAIRING_REJECT DK_BTN2_MSK
@@ -103,18 +106,28 @@ static void num_comp_reply(bool accept);
 BT_HIDS_DEF(hids_obj,
 	    INPUT_REP_BUTTONS_LEN,
 	    INPUT_REP_MOVEMENT_LEN,
-	    INPUT_REP_MEDIA_PLAYER_LEN);
+	    INPUT_REP_MEDIA_PLAYER_LEN,
+        OUTPUT_REPORT_MAX_LEN,
+        INPUT_REPORT_KEYS_MAX_LEN);
 
 static struct k_work hids_work;
-struct mouse_pos {
+
+enum InputEventType {
+    INPUT_EVENT_TYPE_NONE = 0,
+    INPUT_EVENT_TYPE_MOUSE = 1,
+    INPUT_EVENT_TYPE_KEYBOARD = 2,
+} ;
+
+struct InputEvent {
+    uint8_t type;
+    uint8_t buttons;
 	int16_t x_val;
 	int16_t y_val;
-	uint8_t buttons;
 };
 
 /* Mouse movement queue. */
 K_MSGQ_DEFINE(hids_queue,
-	      sizeof(struct mouse_pos),
+	      sizeof(struct InputEvent),
 	      HIDS_QUEUE_SIZE,
 	      4);
 
@@ -156,6 +169,9 @@ K_MSGQ_DEFINE(mitm_queue,
 	      sizeof(struct pairing_data_mitm),
 	      CONFIG_BT_HIDS_MAX_CLIENT_COUNT,
 	      4);
+
+
+extern struct keyboard_state hid_keyboard_state;
 
 #if CONFIG_BT_DIRECTED_ADVERTISING
 static void bond_find(const struct bt_bond_info *info, void *user_data)
@@ -254,8 +270,9 @@ static void pairing_process(struct k_work *work)
 	printk("Passkey for %s: %06u\n", addr, pairing_data.passkey);
 //	printk("Press Button 1 to confirm, Button 2 to reject.\n");
 
-    // Auto confirm
+//     Auto confirm
     if (k_msgq_num_used_get(&mitm_queue)) {
+        printk("Auto confirmed passkey.\n");
         num_comp_reply(true);
     }
 }
@@ -408,12 +425,29 @@ static void hids_pm_evt_handler(enum bt_hids_pm_evt evt,
 	}
 }
 
+static void hids_outp_rep_handler(struct bt_hids_rep *rep,
+                                  struct bt_conn *conn,
+                                  bool write)
+{
+    char addr[BT_ADDR_LE_STR_LEN];
+
+    if (!write) {
+        printk("Output report read\n");
+        return;
+    };
+
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+    printk("Output report has been received %s\n", addr);
+    caps_lock_handler(rep);
+}
+
 
 static void hid_init(void)
 {
 	int err;
 	struct bt_hids_init_param hids_init_param = { 0 };
 	struct bt_hids_inp_rep *hids_inp_rep;
+    struct bt_hids_outp_feat_rep *hids_outp_rep;
 	static const uint8_t mouse_movement_mask[DIV_ROUND_UP(INPUT_REP_MOVEMENT_LEN, 8)] = {0};
 
 	static const uint8_t report_map[] = {
@@ -492,16 +526,60 @@ static void hid_init(void)
 		0x81, 0x06,       /* Input (Data,Value,Relative,Bit Field) */
 		0x0A, 0x24, 0x02, /* Usage (AC Back) */
 		0x81, 0x06,       /* Input (Data,Value,Relative,Bit Field) */
-		0xC0              /* End Collection */
-	};
+		0xC0,              /* End Collection */
+
+
+        0x05, 0x01,       /* Usage Page (Generic Desktop) */
+        0x09, 0x06,       /* Usage (Keyboard) */
+        0xA1, 0x01,       /* Collection (Application) */
+
+            /* Keys */
+        0x85, 0x04,       /* Report Id (4) */
+        0x05, 0x07,       /* Usage Page (Key Codes) */
+        0x19, 0xe0,       /* Usage Minimum (224) */
+        0x29, 0xe7,       /* Usage Maximum (231) */
+        0x15, 0x00,       /* Logical Minimum (0) */
+        0x25, 0x01,       /* Logical Maximum (1) */
+        0x75, 0x01,       /* Report Size (1) */
+        0x95, 0x08,       /* Report Count (8) */
+        0x81, 0x02,       /* Input (Data, Variable, Absolute) */
+
+        0x95, 0x01,       /* Report Count (1) */
+        0x75, 0x08,       /* Report Size (8) */
+        0x81, 0x01,       /* Input (Constant) reserved byte(1) */
+
+        0x95, 0x06,       /* Report Count (6) */
+        0x75, 0x08,       /* Report Size (8) */
+        0x15, 0x00,       /* Logical Minimum (0) */
+        0x25, 0x65,       /* Logical Maximum (101) */
+        0x05, 0x07,       /* Usage Page (Key codes) */
+        0x19, 0x00,       /* Usage Minimum (0) */
+        0x29, 0x65,       /* Usage Maximum (101) */
+        0x81, 0x00,       /* Input (Data, Array) Key array(6 bytes) */
+
+            /* LED */
+        0x85, 0x05,       /* Report Id (5) */
+        0x95, 0x05,       /* Report Count (5) */
+        0x75, 0x01,       /* Report Size (1) */
+        0x05, 0x08,       /* Usage Page (Page# for LEDs) */
+        0x19, 0x01,       /* Usage Minimum (1) */
+        0x29, 0x05,       /* Usage Maximum (5) */
+        0x91, 0x02,       /* Output (Data, Variable, Absolute), */
+            /* Led report */
+        0x95, 0x01,       /* Report Count (1) */
+        0x75, 0x03,       /* Report Size (3) */
+        0x91, 0x01,       /* Output (Data, Variable, Absolute), */
+            /* Led report padding */
+
+        0xC0              /* End Collection (Application) */
+    };
 
 	hids_init_param.rep_map.data = report_map;
 	hids_init_param.rep_map.size = sizeof(report_map);
 
 	hids_init_param.info.bcd_hid = BASE_USB_HID_SPEC_VERSION;
 	hids_init_param.info.b_country_code = 0x00;
-	hids_init_param.info.flags = (BT_HIDS_REMOTE_WAKE |
-				      BT_HIDS_NORMALLY_CONNECTABLE);
+	hids_init_param.info.flags = (BT_HIDS_REMOTE_WAKE | BT_HIDS_NORMALLY_CONNECTABLE);
 
 	hids_inp_rep = &hids_init_param.inp_rep_group_init.reports[0];
 	hids_inp_rep->size = INPUT_REP_BUTTONS_LEN;
@@ -519,8 +597,22 @@ static void hid_init(void)
 	hids_inp_rep->id = INPUT_REP_REF_MPLAYER_ID;
 	hids_init_param.inp_rep_group_init.cnt++;
 
-	hids_init_param.is_mouse = true;
+    hids_inp_rep++;
+    hids_inp_rep->size = INPUT_REPORT_KEYS_MAX_LEN;
+    hids_inp_rep->id = INPUT_REP_KEYS_REF_ID;
+    hids_init_param.inp_rep_group_init.cnt++;
+
+
+    hids_init_param.is_mouse = true;
 	hids_init_param.pm_evt_handler = hids_pm_evt_handler;
+
+    hids_outp_rep = &hids_init_param.outp_rep_group_init.reports[OUTPUT_REP_KEYS_IDX];
+    hids_outp_rep->size = OUTPUT_REPORT_MAX_LEN;
+    hids_outp_rep->id = OUTPUT_REP_KEYS_REF_ID;
+    hids_outp_rep->handler = hids_outp_rep_handler;
+    hids_init_param.outp_rep_group_init.cnt++;
+
+    hids_init_param.is_kb = true;
 
 	err = bt_hids_init(&hids_obj, &hids_init_param);
 	__ASSERT(err == 0, "HIDS initialization failed\n");
@@ -611,15 +703,20 @@ static void mouse_click_send(const uint8_t buttons)
 	}
 }
 
-static void mouse_handler(struct k_work *work)
+static void input_event_queue_handler(struct k_work *work)
 {
-	struct mouse_pos pos;
+	struct InputEvent event;
 
-	while (!k_msgq_get(&hids_queue, &pos, K_NO_WAIT)) {
-        if (pos.buttons > 0) {
-            mouse_click_send(pos.buttons);
-        } else {
-		    mouse_movement_send(pos.x_val, pos.y_val);
+
+	while (!k_msgq_get(&hids_queue, &event, K_NO_WAIT)) {
+        if (event.type == INPUT_EVENT_TYPE_MOUSE) {
+            if (event.buttons > 0) {
+                mouse_click_send(event.buttons);
+            } else {
+                mouse_movement_send(event.x_val, event.y_val);
+            }
+        } else if (event.type == INPUT_EVENT_TYPE_KEYBOARD) {
+            type_demo_chars();
         }
 	}
 }
@@ -743,52 +840,48 @@ static void num_comp_reply(bool accept)
 	}
 }
 
+typedef enum {
+    MOUSE_MOVE_NONE,
+    MOUSE_MOVE_UP,
+    MOUSE_MOVE_DOWN,
+    MOUSE_MOVE_LEFT,
+    MOUSE_MOVE_RIGHT,
+} MouseMoveDir;
 
-void button_pressed(const struct device *dev, struct gpio_callback *cb,
-                    uint32_t pins)
+struct MouseMovement {
+    MouseMoveDir dir;
+} mouse_movement;
+
+
+void mouse_button_pressed(const struct device *dev, struct gpio_callback *cb,
+                          uint32_t pins)
 {
+    struct InputEvent event;
+    memset(&event, 0, sizeof(struct InputEvent));
 
-    bool data_to_send = false;
-    struct mouse_pos pos;
-    memset(&pos, 0, sizeof(struct mouse_pos));
+    uint8_t pin_no = find_msb_set(pins) - 1;
+    int level = gpio_pin_get(dev, pin_no);
 
-        printk("Button pressed at %" PRIu32 " PINS %" PRIu32 " PIN_MASK %" PRIu32 "\n", k_cycle_get_32(), pins, cb->pin_mask);
+    printk("Button pressed at %" PRIu32 " PIN %s %" PRIu32 " PIN_MASK %" PRIu32 " LEVEL %d\n", k_cycle_get_32(), dev->name, pin_no, cb->pin_mask, level);
 
-        if (pins & KEY_LEFT_MASK) {
-            pos.x_val -= MOVEMENT_SPEED;
-            printk("%s(): left\n", __func__);
-            data_to_send = true;
-        }
-        if (pins & KEY_UP_MASK) {
-            pos.y_val -= MOVEMENT_SPEED;
-        printk("%s(): up\n", __func__);
-        data_to_send = true;
-    }
-    if (pins & KEY_RIGHT_MASK) {
-        pos.x_val += MOVEMENT_SPEED;
-        printk("%s(): right\n", __func__);
-        data_to_send = true;
-    }
-    if (pins & KEY_DOWN_MASK) {
-        pos.y_val += MOVEMENT_SPEED;
-        printk("%s(): down\n", __func__);
-        data_to_send = true;
-    }
+    event.type = INPUT_EVENT_TYPE_NONE;
+
     if (pins & KEY_SET_MASK) {
         printk("%s(): set\n", __func__);
-        pos.buttons = MOUSE_BUTTON_LEFT;
-        data_to_send = true;
+        event.buttons = MOUSE_BUTTON_LEFT;
+        event.type = INPUT_EVENT_TYPE_MOUSE;
     }
+
     if (pins & KEY_RST_MASK) {
         printk("%s(): rst\n", __func__);
-        pos.buttons = MOUSE_BUTTON_RIGHT;
-        data_to_send = true;
+        event.buttons = MOUSE_BUTTON_RIGHT;
+        event.type = INPUT_EVENT_TYPE_MOUSE;
     }
 
-    if (data_to_send) {
+    if (event.type != INPUT_EVENT_TYPE_NONE) {
         int err;
 
-        err = k_msgq_put(&hids_queue, &pos, K_NO_WAIT);
+        err = k_msgq_put(&hids_queue, &event, K_NO_WAIT);
         if (err) {
             printk("No space in the queue for button pressed\n");
             return;
@@ -799,44 +892,114 @@ void button_pressed(const struct device *dev, struct gpio_callback *cb,
     }
 }
 
+
+void mouse_move_pressed(const struct device *dev, struct gpio_callback *cb,
+                    uint32_t pins)
+{
+    uint8_t pin_no = find_msb_set(pins) - 1;
+    // logical level (gpio configured as low active)
+    bool is_down = gpio_pin_get(dev, pin_no) == 1;
+
+    printk("Button pressed at %" PRIu32 " PIN %s %" PRIu32 " PIN_MASK %" PRIu32 " LEVEL %d\n", k_cycle_get_32(), dev->name, pin_no, cb->pin_mask, is_down);
+
+    if (is_down) {
+        if (pins & KEY_LEFT_MASK) {
+            printk("%s(): left\n", __func__);
+            mouse_movement.dir = MOUSE_MOVE_LEFT;
+        }
+        if (pins & KEY_UP_MASK) {
+            printk("%s(): up\n", __func__);
+            mouse_movement.dir = MOUSE_MOVE_UP;
+        }
+        if (pins & KEY_RIGHT_MASK) {
+            printk("%s(): right\n", __func__);
+            mouse_movement.dir = MOUSE_MOVE_RIGHT;
+        }
+        if (pins & KEY_DOWN_MASK) {
+            printk("%s(): down\n", __func__);
+            mouse_movement.dir = MOUSE_MOVE_DOWN;
+        }
+    } else {
+        mouse_movement.dir = MOUSE_MOVE_NONE;
+    }
+}
+
+void init_button(const struct gpio_dt_spec *button)
+{
+
+    if (!gpio_is_ready_dt(button)) {
+        printk("Error: button device %s is not ready\n",
+               button->port->name);
+        return;
+    }
+
+    int ret = gpio_pin_configure_dt(button, GPIO_INPUT);
+    if (ret != 0) {
+        printk("Error %d: failed to configure %s pin %d\n",
+               ret, button->port->name, button->pin);
+        return;
+    }
+
+    ret = gpio_pin_interrupt_configure_dt(button, GPIO_INT_EDGE_TO_INACTIVE);
+    if (ret != 0) {
+        printk("Error %d: failed to configure interrupt on %s pin %d\n",
+               ret, button->port->name, button->pin);
+        return;
+    }
+
+    printk("Set up button at %s pin %d\n", button->port->name, button->pin);
+}
+
 int init_buttons()
 {
-    const struct gpio_dt_spec *buttons[] = {
+    const struct gpio_dt_spec *move_buttons[] = {
         &button_up,
         &button_down,
         &button_left,
         &button_right,
+    };
+    const struct gpio_dt_spec *cmd_buttons[] = {
         &button_mid,
         &button_set,
         &button_rst,
     };
 
-    for (int i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i) {
-        const struct gpio_dt_spec *button = buttons[i];
+    int button_count = ARRAY_SIZE(cmd_buttons);
+    uint32_t pin_mask = 0;
 
-        if (!gpio_is_ready_dt(button)) {
-            printk("Error: button device %s is not ready\n",
-                   button->port->name);
-            return 0;
+    for (int i = 0; i < button_count; ++i) {
+        const struct gpio_dt_spec *button = cmd_buttons[i];
+        init_button(button);
+
+        pin_mask |= BIT(cmd_buttons[i]->pin);
+    }
+    gpio_init_callback(&mouse_button_callback, mouse_button_pressed, pin_mask);
+
+    for (int i = 0; i < button_count; ++i) {
+        int err = gpio_add_callback(cmd_buttons[i]->port, &mouse_button_callback);
+        if (err) {
+            printk("[%s] Cannot add callback", __func__);
+            return err;
         }
+    }
 
-        int ret = gpio_pin_configure_dt(button, GPIO_INPUT);
-        if (ret != 0) {
-            printk("Error %d: failed to configure %s pin %d\n",
-                   ret, button->port->name, button->pin);
-            return 0;
+    button_count = ARRAY_SIZE(move_buttons);
+    pin_mask = 0;
+
+    for (int i = 0; i < button_count; ++i) {
+        const struct gpio_dt_spec *button = move_buttons[i];
+        init_button(button);
+
+        pin_mask |= BIT(move_buttons[i]->pin);
+    }
+    gpio_init_callback(&mouse_move_callback, mouse_move_pressed, pin_mask);
+
+    for (int i = 0; i < button_count; ++i) {
+        int err = gpio_add_callback(move_buttons[i]->port, &mouse_move_callback);
+        if (err) {
+            printk("[%s] Cannot add callback", __func__);
+            return err;
         }
-
-        ret = gpio_pin_interrupt_configure_dt(button, GPIO_INT_EDGE_TO_ACTIVE);
-        if (ret != 0) {
-            printk("Error %d: failed to configure interrupt on %s pin %d\n",
-                   ret, button->port->name, button->pin);
-            return 0;
-        }
-
-        gpio_init_callback(&button_cb_data[i], button_pressed, BIT(button->pin));
-        gpio_add_callback(button->port, &button_cb_data[i]);
-        printk("Set up button at %s pin %d\n", button->port->name, button->pin);
     }
 
     return 0;
@@ -844,11 +1007,12 @@ int init_buttons()
 
 void button_changed(uint32_t button_state, uint32_t has_changed)
 {
-	bool data_to_send = false;
-	struct mouse_pos pos;
+	struct InputEvent event;
 	uint32_t buttons = button_state & has_changed;
 
-	memset(&pos, 0, sizeof(struct mouse_pos));
+	memset(&event, 0, sizeof(struct InputEvent));
+
+    event.type = INPUT_EVENT_TYPE_NONE;
 
 	if (IS_ENABLED(CONFIG_BT_HIDS_SECURITY_ENABLED)) {
 		if (k_msgq_num_used_get(&mitm_queue)) {
@@ -866,31 +1030,23 @@ void button_changed(uint32_t button_state, uint32_t has_changed)
 		}
 	}
 
-	if (buttons & KEY_LEFT_MASK) {
-		pos.x_val -= MOVEMENT_SPEED;
-		printk("%s(): left\n", __func__);
-		data_to_send = true;
-	}
-	if (buttons & KEY_UP_MASK) {
-		pos.y_val -= MOVEMENT_SPEED;
-		printk("%s(): up\n", __func__);
-		data_to_send = true;
-	}
-	if (buttons & KEY_RIGHT_MASK) {
-		pos.x_val += MOVEMENT_SPEED;
-		printk("%s(): right\n", __func__);
-		data_to_send = true;
-	}
-	if (buttons & KEY_DOWN_MASK) {
-		pos.y_val += MOVEMENT_SPEED;
-		printk("%s(): down\n", __func__);
-		data_to_send = true;
+	if (buttons & DK_BTN1_MSK) {
+        printk("%s(): button1 click\n", __func__);
+        event.buttons = MOUSE_BUTTON_LEFT;
+        event.type = INPUT_EVENT_TYPE_MOUSE;
 	}
 
-	if (data_to_send) {
+	if (buttons & KEY_TEXT_MASK) {
+        printk("%s(): button2 click\n", __func__);
+        if ((button_state & KEY_TEXT_MASK) != 0) {
+            event.type = INPUT_EVENT_TYPE_KEYBOARD;
+        }
+	}
+
+	if (event.type != INPUT_EVENT_TYPE_NONE) {
 		int err;
 
-		err = k_msgq_put(&hids_queue, &pos, K_NO_WAIT);
+		err = k_msgq_put(&hids_queue, &event, K_NO_WAIT);
 		if (err) {
 			printk("No space in the queue for button pressed\n");
 			return;
@@ -900,7 +1056,6 @@ void button_changed(uint32_t button_state, uint32_t has_changed)
 		}
 	}
 }
-
 
 void configure_buttons(void)
 {
@@ -932,6 +1087,56 @@ static void bas_notify(void)
 	bt_bas_set_battery_level(battery_level);
 }
 
+void mouse_event_sender(struct k_timer * timer)
+{
+    struct InputEvent event;
+    memset(&event, 0, sizeof(struct InputEvent));
+    static uint8_t acc = 0;
+
+    if (mouse_movement.dir == MOUSE_MOVE_NONE) {
+        // reset acc timer
+        acc = 0;
+    } else {
+
+        event.type = INPUT_EVENT_TYPE_MOUSE;
+        switch (mouse_movement.dir) {
+            case MOUSE_MOVE_UP:
+                event.y_val = -acc;
+                break;
+            case MOUSE_MOVE_DOWN:
+                event.y_val = acc;
+                break;
+            case MOUSE_MOVE_LEFT:
+                event.x_val = -acc;
+                break;
+            case MOUSE_MOVE_RIGHT:
+                event.x_val = acc;
+                break;
+            default:
+                event.type = INPUT_EVENT_TYPE_NONE;
+                break;
+        }
+
+        if (event.type != INPUT_EVENT_TYPE_NONE) {
+            int err;
+
+            err = k_msgq_put(&hids_queue, &event, K_NO_WAIT);
+            if (err) {
+                printk("No space in the queue for button pressed\n");
+                return;
+            }
+            if (k_msgq_num_used_get(&hids_queue) == 1) {
+                k_work_submit(&hids_work);
+            }
+        }
+
+        if (acc < 10) {
+            acc++;
+        }
+    }
+}
+
+K_TIMER_DEFINE(hid_report_timer, mouse_event_sender, NULL);
 
 int main(void)
 {
@@ -964,7 +1169,7 @@ int main(void)
 
 	printk("Bluetooth initialized\n");
 
-	k_work_init(&hids_work, mouse_handler);
+    k_work_init(&hids_work, input_event_queue_handler);
 	k_work_init(&adv_work, advertising_process);
 	if (IS_ENABLED(CONFIG_BT_HIDS_SECURITY_ENABLED)) {
 		k_work_init(&pairing_work, pairing_process);
@@ -978,9 +1183,78 @@ int main(void)
 
 	configure_buttons();
 
+
+    /* start periodic timer that expires once every second */
+    k_timer_start(&hid_report_timer, K_MSEC(20), K_MSEC(20));
+
 	while (1) {
 		k_sleep(K_SECONDS(1));
 		/* Battery level simulation */
 		bas_notify();
 	}
+}
+
+
+
+/** @brief Function process and send keyboard state to all active connections
+ *
+ * Function process global keyboard state and send it to all connected
+ * clients.
+ *
+ * @return 0 on success or negative error code.
+ */
+int key_report_send(void)
+{
+    for (size_t i = 0; i < CONFIG_BT_HIDS_MAX_CLIENT_COUNT; i++) {
+        if (conn_mode[i].conn) {
+            int err;
+
+            err = key_report_con_send(&hid_keyboard_state,
+                                      conn_mode[i].in_boot_mode,
+                                      conn_mode[i].conn);
+            if (err) {
+                printk("Key report send error: %d\n", err);
+                return err;
+            }
+        }
+    }
+    return 0;
+}
+
+
+/** @brief Function process keyboard state and sends it
+ *
+ *  @param pstate     The state to be sent
+ *  @param boot_mode  Information if boot mode protocol is selected.
+ *  @param conn       Connection handler
+ *
+ *  @return 0 on success or negative error code.
+ */
+int key_report_con_send(const struct keyboard_state *state,
+                        bool boot_mode,
+                        struct bt_conn *conn)
+{
+    int err = 0;
+    uint8_t  data[INPUT_REPORT_KEYS_MAX_LEN];
+    uint8_t *key_data;
+    const uint8_t *key_state;
+    size_t n;
+
+    data[0] = state->ctrl_keys_state;
+    data[1] = 0;
+    key_data = &data[2];
+    key_state = state->keys_state;
+
+    for (n = 0; n < KEY_PRESS_MAX; ++n) {
+        *key_data++ = *key_state++;
+    }
+    if (boot_mode) {
+        err = bt_hids_boot_kb_inp_rep_send(&hids_obj, conn, data,
+                                           sizeof(data), NULL);
+    } else {
+        err = bt_hids_inp_rep_send(&hids_obj, conn,
+                                   INPUT_REP_KEYS_IDX, data,
+                                   sizeof(data), NULL);
+    }
+    return err;
 }
