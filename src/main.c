@@ -178,7 +178,7 @@ K_MSGQ_DEFINE(mitm_queue,
 /* scheduling priority used by each thread */
 #define PRIORITY 7
 
-K_THREAD_DEFINE(blink0_id, STACKSIZE, nfc_task, NULL, NULL, NULL,
+K_THREAD_DEFINE(nfc_task_id, STACKSIZE, nfc_task, NULL, NULL, NULL,
                 PRIORITY, 0, 0);
 
 extern struct keyboard_state hid_keyboard_state;

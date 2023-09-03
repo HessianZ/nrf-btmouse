@@ -11,20 +11,17 @@
 #include <nfc/ndef/launchapp_msg.h>
 
 #include <dk_buttons_and_leds.h>
+#include <nfc/ndef/uri_msg.h>
 
 #define NDEF_MSG_BUF_SIZE	256
 #define NFC_FIELD_LED		DK_LED1
 
 /** .. include_startingpoint_pkg_def_launchapp_rst */
 /* Package: no.nordicsemi.android.nrftoolbox */
-static const uint8_t android_pkg_name[] = {
-	'n', 'o', '.', 'n', 'o', 'r', 'd', 'i', 'c', 's', 'e', 'm', 'i', '.', 'a', 'n', 'd', 'r',
-	'o', 'i', 'd', '.', 'n', 'r', 'f', 't', 'o', 'o', 'l', 'b', 'o', 'x' };
+static const uint8_t android_pkg_name[] = "com.tencent.mm";
 
 /* URI nrf-toolbox://main/ */
-static const uint8_t universal_link[] = {
-	'n', 'r', 'f', '-', 't', 'o', 'o', 'l', 'b', 'o', 'x', ':', '/', '/', 'm', 'a', 'i', 'n',
-	'/'};
+static const uint8_t universal_link[] = "weixin://dl/scan";
 /** .. include_endpoint_pkg_def_launchapp_rst */
 
 /* Buffer used to hold an NFC NDEF message. */
@@ -74,10 +71,18 @@ void nfc_task(void)
 	}
 
 	/* Encode launch app data  */
-	err = nfc_launchapp_msg_encode(android_pkg_name,
-				       sizeof(android_pkg_name),
-				       universal_link,
-				       sizeof(universal_link),
+//	err = nfc_launchapp_msg_encode(android_pkg_name,
+//				       sizeof(android_pkg_name)-1,
+//				       universal_link,
+//				       sizeof(universal_link)-1,
+//				       ndef_msg_buf,
+//				       &len);
+
+    const uint8_t url[] = "//hessian.cn/";
+	/* Encode launch URI  */
+	err = nfc_ndef_uri_msg_encode(NFC_URI_HTTP,
+                                  url,
+				       sizeof(url)-1,
 				       ndef_msg_buf,
 				       &len);
 	if (err) {
