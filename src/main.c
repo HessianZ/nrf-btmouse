@@ -30,6 +30,7 @@
 #include <zephyr/logging/log.h>
 
 #include "kbd.h"
+#include "nfc.h"
 
 #define DEVICE_NAME     CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
@@ -170,6 +171,15 @@ K_MSGQ_DEFINE(mitm_queue,
 	      CONFIG_BT_HIDS_MAX_CLIENT_COUNT,
 	      4);
 
+
+/* size of stack area used by each thread */
+#define STACKSIZE 1024
+
+/* scheduling priority used by each thread */
+#define PRIORITY 7
+
+K_THREAD_DEFINE(blink0_id, STACKSIZE, nfc_task, NULL, NULL, NULL,
+                PRIORITY, 0, 0);
 
 extern struct keyboard_state hid_keyboard_state;
 
