@@ -9,7 +9,7 @@ set(BOARD nrf7002dk_nrf5340_cpuapp)
 set(DTC_OVERLAY_FILE nrf7002dk_nrf5340_cpuapp.overlay)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(NONE)
+project(BTMouse)
 
 FILE(GLOB app_sources src/*.c)
 # NORDIC SDK APP START
