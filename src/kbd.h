@@ -2,8 +2,8 @@
 // Created by Hessian on 2023/8/31.
 //
 
-#ifndef NONE_KBD_H
-#define NONE_KBD_H
+#ifndef BTMOUSE_KBD_H
+#define BTMOUSE_KBD_H
 
 #define INPUT_REP_KEYS_REF_ID       4
 #define INPUT_REP_KEYS_IDX          3
@@ -256,4 +256,4 @@ void caps_lock_handler(const struct bt_hids_rep *rep);
 void button_text_changed(bool down);
 void type_demo_chars();
 
-#endif //NONE_KBD_H
+#endif //BTMOUSE_KBD_H
