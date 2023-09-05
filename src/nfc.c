@@ -16,14 +16,6 @@
 #define NDEF_MSG_BUF_SIZE	256
 #define NFC_FIELD_LED		DK_LED1
 
-/** .. include_startingpoint_pkg_def_launchapp_rst */
-/* Package: no.nordicsemi.android.nrftoolbox */
-static const uint8_t android_pkg_name[] = "com.tencent.mm";
-
-/* URI nrf-toolbox://main/ */
-static const uint8_t universal_link[] = "weixin://dl/scan";
-/** .. include_endpoint_pkg_def_launchapp_rst */
-
 /* Buffer used to hold an NFC NDEF message. */
 static uint8_t ndef_msg_buf[NDEF_MSG_BUF_SIZE];
 
@@ -78,9 +70,9 @@ void nfc_task(void)
 //				       ndef_msg_buf,
 //				       &len);
 
-    const uint8_t url[] = "//hessian.cn/";
+    const uint8_t url[] = "//www.eetree.cn/page/digikey-funpack";
 	/* Encode launch URI  */
-	err = nfc_ndef_uri_msg_encode(NFC_URI_HTTP,
+	err = nfc_ndef_uri_msg_encode(NFC_URI_HTTPS,
                                   url,
 				       sizeof(url)-1,
 				       ndef_msg_buf,
